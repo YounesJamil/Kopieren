@@ -5,9 +5,14 @@
 //    ist C neuer, wird Y ueberschrieben; ist Y neuer, bleibt Y wie es ist.
 //  - Identische Dateien (Datum gleich, +/- 2 Sekunden) werden uebersprungen.
 //  - C wird nie veraendert, und es wird NIE etwas geloescht.
+//  - Cache-Ordner (Traktor-Stripes, Browser-Caches usw.) werden uebersprungen.
+//
+// Mit --umleiten wird danach geprueft, ob alles auf Y angekommen ist. Dann wird
+// der Ordner auf C in "..._alt" umbenannt und an seiner Stelle eine Junction
+// auf Y angelegt. Programme, die fest nach C schreiben, landen so auf Y.
 //
 // Aufruf:
-//   DokumenteSync.exe [--probelauf] [--c PFAD] [--y PFAD]
+//   DokumenteSync.exe [--probelauf] [--umleiten] [--mit-caches] [--c PFAD] [--y PFAD]
 //
 // Bauen (C++17):
 //   MSVC : cl /std:c++17 /EHsc /O2 /utf-8 DokumenteSync.cpp
@@ -68,6 +73,7 @@ struct Statistik {
 };
 
 std::ofstream g_log;
+bool g_mitCaches = false;
 
 std::string U8(const fs::path& p) {
     auto s = p.u8string();
@@ -88,6 +94,27 @@ std::string Schluessel(const fs::path& relativ) {
 #else
     return U8(relativ);
 #endif
+}
+
+std::string Klein(const fs::path& name) {
+    std::string s = U8(name);
+    std::transform(s.begin(), s.end(), s.begin(),
+                   [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+    return s;
+}
+
+// Ordner, deren Inhalt die Programme jederzeit neu erzeugen.
+bool IstCacheOrdner(const fs::path& name) {
+    if (g_mitCaches) return false;
+    static const char* const kCaches[] = {
+        "cache", "code cache", "gpucache", "dawncache", "shadercache", "grshadercache",
+        "cache_data", "cachestorage", "scriptcache",
+        "coverart", "stripes", "transients",   // Traktor
+    };
+    const std::string n = Klein(name);
+    for (const char* c : kCaches)
+        if (n == c) return true;
+    return false;
 }
 
 bool Ignorieren(const fs::path& name) {
@@ -126,6 +153,7 @@ void Einlesen(const fs::path& wurzel, const fs::path& relativ, Bestand& b, Stati
         const fs::path rel = relativ / name;
 
         if (e.is_directory(ec)) {
+            if (IstCacheOrdner(name)) continue;
             b.ordner[Schluessel(rel)] = rel;
             Einlesen(wurzel, rel, b, st);
         } else if (e.is_regular_file(ec)) {
@@ -237,21 +265,140 @@ bool IstUnterordner(const fs::path& innen, const fs::path& aussen) {
     return i.rfind(a, 0) == 0;
 }
 
+// Prueft, ob jede Datei von C auf Y mindestens genauso neu vorhanden ist.
+bool AllesAufY(const fs::path& ordnerC, const fs::path& ordnerY) {
+    Statistik st;
+    Bestand c, y;
+    Einlesen(ordnerC, {}, c, st);
+    Einlesen(ordnerY, {}, y, st);
+    int fehlt = 0;
+    for (const auto& [k, dc] : c.dateien) {
+        auto iy = y.dateien.find(k);
+        if (iy == y.dateien.end() || dc.zeit - iy->second.zeit > kToleranz) {
+            if (++fehlt <= 20) Ausgabe("  fehlt/aelter auf Y: " + U8(dc.relativ));
+        }
+    }
+    if (fehlt > 20) Ausgabe("  ... und " + std::to_string(fehlt - 20) + " weitere");
+    return fehlt == 0 && st.fehler == 0;
+}
+
+bool JunctionAnlegen(const fs::path& link, const fs::path& ziel) {
+#ifdef _WIN32
+    std::wstring cmd = L"cmd.exe /c mklink /J \"" + link.wstring() + L"\" \"" + ziel.wstring() + L"\"";
+    STARTUPINFOW si{};
+    si.cb = sizeof(si);
+    PROCESS_INFORMATION pi{};
+    if (!CreateProcessW(nullptr, cmd.data(), nullptr, nullptr, FALSE, 0, nullptr, nullptr, &si, &pi))
+        return false;
+    WaitForSingleObject(pi.hProcess, INFINITE);
+    DWORD code = 1;
+    GetExitCodeProcess(pi.hProcess, &code);
+    CloseHandle(pi.hProcess);
+    CloseHandle(pi.hThread);
+    return code == 0;
+#else
+    std::error_code ec;
+    fs::create_directory_symlink(ziel, link, ec);
+    return !ec;
+#endif
+}
+
+// Ersetzt den Ordner auf C durch eine Junction auf Y. Der alte Ordner bleibt
+// als "..._alt" liegen, es wird nichts geloescht.
+bool Umleiten(const fs::path& ordnerC, const fs::path& ordnerY) {
+    Ausgabe("");
+    Ausgabe("=== Umleitung einrichten ===");
+
+    fs::path prog = ProgrammOrdner();
+    if (Schluessel(prog) == Schluessel(ordnerC) || IstUnterordner(prog, ordnerC)) {
+        Ausgabe("Das Programm liegt selbst im Ordner auf C (" + U8(prog) + ").");
+        Ausgabe("Bitte den Kopieren-Ordner zuerst nach Y verschieben (z. B. Y:\\Tools) und dort starten.");
+        return false;
+    }
+    std::error_code ec;
+    fs::current_path(ordnerY, ec);   // damit wir den C-Ordner nicht selbst blockieren
+
+    Ausgabe("Pruefe, ob alles auf Y angekommen ist ...");
+    if (!AllesAufY(ordnerC, ordnerY)) {
+        Ausgabe("Nicht alle Dateien sind auf Y - Umleitung wird NICHT eingerichtet.");
+        return false;
+    }
+    Ausgabe("  OK, alles da.");
+
+    fs::path alt = ordnerC;
+    alt += "_alt";
+    if (fs::exists(alt, ec)) {
+        alt = ordnerC;
+        alt += "_alt_" + Zeitstempel("%Y-%m-%d_%H-%M-%S");
+    }
+
+    Ausgabe("");
+    Ausgabe("Jetzt wird:");
+    Ausgabe("  1. " + U8(ordnerC) + "  umbenannt in  " + U8(alt));
+    Ausgabe("  2. an seiner Stelle eine Umleitung auf  " + U8(ordnerY) + "  angelegt.");
+    Ausgabe("Bitte vorher alle Programme schliessen (Traktor, Spiele, Launcher, Office ...).");
+    std::cout << "Fortfahren? Tippe JA und Enter: " << std::flush;
+    std::string antwort;
+    std::getline(std::cin, antwort);
+    std::transform(antwort.begin(), antwort.end(), antwort.begin(),
+                   [](unsigned char c) { return static_cast<char>(std::toupper(c)); });
+    if (antwort != "JA" && antwort != "J") {
+        Ausgabe("Abgebrochen - nichts veraendert.");
+        return false;
+    }
+
+    fs::rename(ordnerC, alt, ec);
+    if (ec) {
+        Ausgabe("FEHLER: Umbenennen hat nicht geklappt: " + ec.message());
+        Ausgabe("Meist ist noch ein Programm oder ein Explorer-Fenster im Ordner offen.");
+        Ausgabe("Alles schliessen (notfalls neu anmelden) und nochmal versuchen. Nichts wurde veraendert.");
+        return false;
+    }
+
+    if (!JunctionAnlegen(ordnerC, ordnerY)) {
+        Ausgabe("FEHLER: Umleitung konnte nicht angelegt werden - mache Umbenennung rueckgaengig.");
+        std::error_code ec2;
+        fs::rename(alt, ordnerC, ec2);
+        if (ec2) Ausgabe("ACHTUNG: Zurueckbenennen fehlgeschlagen. Bitte " + U8(alt) +
+                         " von Hand wieder in " + U8(ordnerC) + " umbenennen.");
+        return false;
+    }
+
+    // Sonst zeigt der Explorer den alten Ordner auch als "Dokumente" an.
+    fs::path ini = alt / "desktop.ini";
+    if (fs::exists(ini, ec)) {
+#ifdef _WIN32
+        SetFileAttributesW(ini.c_str(), FILE_ATTRIBUTE_NORMAL);
+#endif
+        fs::rename(ini, alt / "desktop.ini.bak", ec);
+    }
+
+    Ausgabe("");
+    Ausgabe("Fertig! " + U8(ordnerC) + " zeigt jetzt auf " + U8(ordnerY) + ".");
+    Ausgabe("Der alte Inhalt liegt in " + U8(alt) + ".");
+    Ausgabe("Wenn alle Programme ein paar Tage normal laufen, kannst du diesen Ordner loeschen.");
+    return true;
+}
+
 void Hilfe() {
     std::cout <<
         "DokumenteSync - holt alles von C nach Y, das neuere Datum gewinnt.\n\n"
         "  --probelauf    nur anzeigen, nichts kopieren\n"
+        "  --umleiten     danach C-Ordner durch eine Junction auf Y ersetzen\n"
+        "  --mit-caches   auch Cache-Ordner kopieren\n"
         "  --c PFAD       Ordner auf C  (Standard: %USERPROFILE%\\Documents)\n"
         "  --y PFAD       Ordner auf Y  (Standard: eingestellter Dokumente-Ordner oder Y:\\Documents)\n";
 }
 
 int Programm(const std::vector<fs::path>& args) {
-    bool probelauf = false;
+    bool probelauf = false, umleiten = false;
     fs::path ordnerC, ordnerY;
 
     for (size_t i = 0; i < args.size(); ++i) {
         std::string a = U8(args[i]);
         if (a == "--probelauf" || a == "-p") probelauf = true;
+        else if (a == "--umleiten") umleiten = true;
+        else if (a == "--mit-caches") g_mitCaches = true;
         else if (a == "--c" && i + 1 < args.size()) ordnerC = args[++i];
         else if (a == "--y" && i + 1 < args.size()) ordnerY = args[++i];
         else if (a == "--hilfe" || a == "-h" || a == "/?") { Hilfe(); return 0; }
@@ -269,6 +416,11 @@ int Programm(const std::vector<fs::path>& args) {
         std::cout << "Ordner Y wurde nicht gefunden: " << U8(ordnerY)
                   << "\n(Laufwerk Y angeschlossen? Pfad mit --y angeben.)\n";
         return 2;
+    }
+    if (IstVerknuepfung(fs::directory_entry(ordnerC, ec))) {
+        std::cout << "Ordner C ist bereits eine Umleitung (Junction): " << U8(ordnerC)
+                  << "\nAlles, was Programme dort ablegen, landet schon auf Y. Nichts zu tun.\n";
+        return 0;
     }
     ordnerC = fs::canonical(ordnerC, ec);
     ordnerY = fs::canonical(ordnerY, ec);
@@ -290,6 +442,8 @@ int Programm(const std::vector<fs::path>& args) {
     Ausgabe("Ordner C : " + U8(ordnerC));
     Ausgabe("Ordner Y : " + U8(ordnerY));
     if (probelauf) Ausgabe("*** PROBELAUF: Es wird nichts kopiert, nur angezeigt. ***");
+    if (umleiten && probelauf) Ausgabe("*** --umleiten wird im Probelauf nicht ausgefuehrt. ***");
+    if (!g_mitCaches) Ausgabe("Cache-Ordner werden uebersprungen (mit --mit-caches doch kopieren).");
     Ausgabe("");
 
     Statistik st;
@@ -335,7 +489,12 @@ int Programm(const std::vector<fs::path>& args) {
     Ausgabe("Konflikte        : " + std::to_string(st.konflikte));
     Ausgabe("Fehler           : " + std::to_string(st.fehler));
     Ausgabe("Protokoll        : " + U8(logDatei));
-    return st.fehler > 0 ? 1 : 0;
+    if (st.fehler > 0) {
+        if (umleiten) Ausgabe("\nEs gab Fehler - Umleitung wird NICHT eingerichtet.");
+        return 1;
+    }
+    if (umleiten && !probelauf) return Umleiten(ordnerC, ordnerY) ? 0 : 1;
+    return 0;
 }
 
 }  // namespace

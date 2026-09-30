@@ -12,6 +12,10 @@ Dokumente-Ordner eigentlich auf `Y:` liegen soll. `DokumenteSync.exe` holt alles
 
 Am Ende liegt auf Y alles, jeweils in der neuesten Version.
 
+Cache-Ordner (z. B. Traktors `Coverart`, `Stripes`, `Transients` oder die
+Browser-Caches von Launchern) werden übersprungen – die erzeugen die Programme
+von selbst neu. Mit `--mit-caches` werden sie doch kopiert.
+
 ## Benutzung
 
 1. Den Ordner mit den Dateien irgendwo ablegen (z. B. `Y:\Tools\Kopieren`).
@@ -40,8 +44,28 @@ DokumenteSync.exe --c "C:\Users\Ich\Documents" --y "Y:\Dokumente" --probelauf
 | Option | Wirkung |
 |---|---|
 | `--probelauf` | Nur anzeigen, nichts verändern |
+| `--umleiten` | Danach C durch eine Umleitung auf Y ersetzen (siehe oben) |
+| `--mit-caches` | Cache-Ordner doch mitkopieren |
 | `--c PFAD` / `--y PFAD` | Eigene Pfade angeben |
 | `--hilfe` | Hilfe anzeigen |
+
+## Dauerhafte Lösung: C auf Y umleiten (empfohlen)
+
+Manche Programme (z. B. Traktor, GTA V) schreiben fest nach `C:\Users\<Name>\Documents`,
+egal was in Windows eingestellt ist. Damit auch deren Dateien automatisch auf Y landen:
+
+1. Den Kopieren-Ordner **auf Y** ablegen (nicht im Documents-Ordner auf C!).
+2. **Alle Programme schließen** (Traktor, Spiele, Launcher, Office, Explorer-Fenster im Dokumente-Ordner).
+3. **`Umleiten.bat` doppelklicken** und die Rückfrage mit `JA` bestätigen.
+
+Das Programm kopiert zuerst alles nach Y und prüft, ob jede Datei angekommen ist.
+Nur dann benennt es `C:\Users\<Name>\Documents` in `Documents_alt` um und legt an
+seiner Stelle eine Umleitung (Junction) auf Y an. Die Programme merken davon nichts:
+Sie schreiben weiter „nach C“, landen aber direkt auf Y. Nichts muss neu eingestellt werden.
+
+Geht etwas schief (z. B. weil noch ein Programm offen ist), wird nichts verändert.
+`Documents_alt` bleibt als Sicherheit liegen – wenn ein paar Tage alles normal läuft,
+kannst du es löschen. Danach brauchst du das Tool nicht mehr.
 
 ## Automatisch regelmäßig ausführen (optional)
 
