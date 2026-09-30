@@ -1,16 +1,16 @@
 # Kopieren – Documents-Ordner auf C und Y abgleichen
 
 Manche Programme legen ihre Dateien in `C:\Users\<Name>\Documents` ab, obwohl der
-Dokumente-Ordner eigentlich auf `Y:` liegen soll. `DokumenteSync.exe` gleicht beide Ordner ab:
+Dokumente-Ordner eigentlich auf `Y:` liegen soll. `DokumenteSync.exe` holt alles von C nach Y:
 
-- **Fehlt eine Datei auf einer Seite**, wird sie dorthin kopiert.
-- **Gibt es eine Datei auf beiden Seiten**, gewinnt die mit dem **neueren Änderungsdatum**.
-  Die ältere Version wird überschrieben.
+- **Fehlt eine Datei auf Y**, wird sie von C nach Y kopiert.
+- **Gibt es eine Datei auf beiden Seiten**, gewinnt die mit dem **neueren Änderungsdatum**:
+  Ist die Datei auf C neuer, wird Y überschrieben. Ist sie auf Y neuer, bleibt Y, wie es ist.
 - **Identische Dateien** (gleiches Datum, ±2 Sekunden) werden übersprungen.
 - **Gleiches Datum, aber andere Größe** → wird als *Konflikt* gemeldet und nicht angefasst.
-- **Es wird nichts gelöscht.**
+- **C wird nie verändert, und es wird nichts gelöscht.**
 
-Am Ende liegen in beiden Ordnern alle Dateien, jeweils in der neuesten Version.
+Am Ende liegt auf Y alles, jeweils in der neuesten Version.
 
 ## Benutzung
 
@@ -40,7 +40,6 @@ DokumenteSync.exe --c "C:\Users\Ich\Documents" --y "Y:\Dokumente" --probelauf
 | Option | Wirkung |
 |---|---|
 | `--probelauf` | Nur anzeigen, nichts verändern |
-| `--nur-nach-y` | Nur C → Y kopieren, C bleibt unverändert |
 | `--c PFAD` / `--y PFAD` | Eigene Pfade angeben |
 | `--hilfe` | Hilfe anzeigen |
 
@@ -57,8 +56,8 @@ Programm: `Y:\Tools\Kopieren\DokumenteSync.exe`.
   bleibt die alte Version heil.
 - Dateien, die gerade geöffnet sind (z. B. eine Outlook-`.pst`), können nicht kopiert
   werden – das Programm vorher schließen. Fehler stehen im Protokoll.
-- Gelöschte Dateien werden **nicht** mitgelöscht: Wer auf einer Seite etwas löscht,
-  bekommt es beim nächsten Lauf von der anderen Seite zurück.
+- Die Dateien auf C bleiben liegen. Löschst du auf Y etwas, das noch auf C liegt,
+  kommt es beim nächsten Lauf wieder nach Y.
 
 ## Selbst kompilieren
 

@@ -1,12 +1,13 @@
-// DokumenteSync - gleicht zwei Dokumente-Ordner (z. B. C: und Y:) ab.
+// DokumenteSync - holt alles aus dem Dokumente-Ordner auf C nach Y.
 //
-//  - Fehlt eine Datei auf einer Seite, wird sie dorthin kopiert.
-//  - Gibt es sie auf beiden Seiten, gewinnt das neuere Aenderungsdatum.
+//  - Fehlt eine Datei auf Y, wird sie von C nach Y kopiert.
+//  - Gibt es sie auf beiden Seiten, gewinnt das neuere Aenderungsdatum:
+//    ist C neuer, wird Y ueberschrieben; ist Y neuer, bleibt Y wie es ist.
 //  - Identische Dateien (Datum gleich, +/- 2 Sekunden) werden uebersprungen.
-//  - Es wird NIE etwas geloescht.
+//  - C wird nie veraendert, und es wird NIE etwas geloescht.
 //
 // Aufruf:
-//   DokumenteSync.exe [--probelauf] [--nur-nach-y] [--c PFAD] [--y PFAD]
+//   DokumenteSync.exe [--probelauf] [--c PFAD] [--y PFAD]
 //
 // Bauen (C++17):
 //   MSVC : cl /std:c++17 /EHsc /O2 /utf-8 DokumenteSync.cpp
@@ -23,7 +24,6 @@
 #include <iomanip>
 #include <iostream>
 #include <map>
-#include <set>
 #include <sstream>
 #include <string>
 #include <system_error>
@@ -239,21 +239,19 @@ bool IstUnterordner(const fs::path& innen, const fs::path& aussen) {
 
 void Hilfe() {
     std::cout <<
-        "DokumenteSync - gleicht zwei Dokumente-Ordner ab, das neuere Datum gewinnt.\n\n"
+        "DokumenteSync - holt alles von C nach Y, das neuere Datum gewinnt.\n\n"
         "  --probelauf    nur anzeigen, nichts kopieren\n"
-        "  --nur-nach-y   nur C -> Y kopieren, C bleibt unveraendert\n"
         "  --c PFAD       Ordner auf C  (Standard: %USERPROFILE%\\Documents)\n"
         "  --y PFAD       Ordner auf Y  (Standard: eingestellter Dokumente-Ordner oder Y:\\Documents)\n";
 }
 
 int Programm(const std::vector<fs::path>& args) {
-    bool probelauf = false, nurNachY = false;
+    bool probelauf = false;
     fs::path ordnerC, ordnerY;
 
     for (size_t i = 0; i < args.size(); ++i) {
         std::string a = U8(args[i]);
         if (a == "--probelauf" || a == "-p") probelauf = true;
-        else if (a == "--nur-nach-y") nurNachY = true;
         else if (a == "--c" && i + 1 < args.size()) ordnerC = args[++i];
         else if (a == "--y" && i + 1 < args.size()) ordnerY = args[++i];
         else if (a == "--hilfe" || a == "-h" || a == "/?") { Hilfe(); return 0; }
@@ -292,7 +290,6 @@ int Programm(const std::vector<fs::path>& args) {
     Ausgabe("Ordner C : " + U8(ordnerC));
     Ausgabe("Ordner Y : " + U8(ordnerY));
     if (probelauf) Ausgabe("*** PROBELAUF: Es wird nichts kopiert, nur angezeigt. ***");
-    if (nurNachY)  Ausgabe("*** Nur C -> Y ***");
     Ausgabe("");
 
     Statistik st;
@@ -304,54 +301,37 @@ int Programm(const std::vector<fs::path>& args) {
             std::to_string(y.dateien.size()) + " Dateien");
     Ausgabe("");
 
-    // Leere Ordner mitnehmen, damit die Struktur auf beiden Seiten gleich ist.
-    if (!probelauf) {
+    // Auch leere Ordner von C auf Y anlegen.
+    if (!probelauf)
         for (const auto& [k, rel] : c.ordner)
             if (!y.ordner.count(k)) fs::create_directories(ordnerY / rel, ec);
-        if (!nurNachY)
-            for (const auto& [k, rel] : y.ordner)
-                if (!c.ordner.count(k)) fs::create_directories(ordnerC / rel, ec);
-    }
 
-    std::set<std::string> alle;
-    for (const auto& kv : c.dateien) alle.insert(kv.first);
-    for (const auto& kv : y.dateien) alle.insert(kv.first);
-
-    Ausgabe("Abgleich:");
-    for (const auto& k : alle) {
-        auto ic = c.dateien.find(k);
+    Ausgabe("Abgleich C -> Y:");
+    for (const auto& [k, dc] : c.dateien) {
         auto iy = y.dateien.find(k);
-        const bool inC = ic != c.dateien.end();
-        const bool inY = iy != y.dateien.end();
-
-        if (inC && !inY) {
-            Uebertragen(ic->second, ordnerC, ordnerY, "C -> Y", "fehlt auf Y", probelauf, st);
-        } else if (!inC && inY) {
-            if (nurNachY) { ++st.uebersprungen; continue; }
-            Uebertragen(iy->second, ordnerY, ordnerC, "Y -> C", "fehlt auf C", probelauf, st);
+        if (iy == y.dateien.end()) {
+            Uebertragen(dc, ordnerC, ordnerY, "C -> Y", "fehlt auf Y", probelauf, st);
+            continue;
+        }
+        const Datei& dy = iy->second;
+        const auto diff = dc.zeit - dy.zeit;
+        if (diff > kToleranz) {
+            Uebertragen(dc, ordnerC, ordnerY, "C -> Y", "auf C neuer", probelauf, st);
+        } else if (-diff > kToleranz) {
+            Ausgabe("  bleibt    " + U8(dy.relativ) + "  (auf Y neuer)");
+            ++st.uebersprungen;
+        } else if (dc.groesse != dy.groesse) {
+            // Gleiches Datum, aber andere Groesse: nicht raten, sondern melden.
+            Ausgabe("  KONFLIKT  " + U8(dc.relativ) +
+                    "  (gleiches Datum, andere Groesse - bitte selbst pruefen)");
+            ++st.konflikte;
         } else {
-            const Datei& dc = ic->second;
-            const Datei& dy = iy->second;
-            const auto diff = dc.zeit - dy.zeit;
-            if (diff > kToleranz) {
-                Uebertragen(dc, ordnerC, ordnerY, "C -> Y", "auf C neuer", probelauf, st);
-            } else if (-diff > kToleranz) {
-                if (nurNachY) { ++st.uebersprungen; continue; }
-                Uebertragen(dy, ordnerY, ordnerC, "Y -> C", "auf Y neuer", probelauf, st);
-            } else if (dc.groesse != dy.groesse) {
-                // Gleiches Datum, aber andere Groesse: nicht raten, sondern melden.
-                Ausgabe("  KONFLIKT  " + U8(dc.relativ) +
-                        "  (gleiches Datum, andere Groesse - bitte selbst pruefen)");
-                ++st.konflikte;
-            } else {
-                ++st.uebersprungen;
-            }
+            ++st.uebersprungen;
         }
     }
-
     Ausgabe("");
     Ausgabe(std::string(probelauf ? "Wuerde kopieren  : " : "Kopiert          : ") + std::to_string(st.kopiert));
-    Ausgabe("Schon aktuell    : " + std::to_string(st.uebersprungen));
+    Ausgabe("Y schon aktuell  : " + std::to_string(st.uebersprungen));
     Ausgabe("Konflikte        : " + std::to_string(st.konflikte));
     Ausgabe("Fehler           : " + std::to_string(st.fehler));
     Ausgabe("Protokoll        : " + U8(logDatei));
