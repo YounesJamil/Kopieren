@@ -83,9 +83,37 @@ Programm: `Y:\Tools\Kopieren\DokumenteSync.exe`.
 - Die Dateien auf C bleiben liegen. Löschst du auf Y etwas, das noch auf C liegt,
   kommt es beim nächsten Lauf wieder nach Y.
 
+## Duplikate auf allen Festplatten finden
+
+**`Duplikate-suchen.bat` doppelklicken.** `DuplikateFinden.exe` durchsucht alle
+Festplatten, USB-Platten und Speicherkarten nach Dateien mit **exakt gleichem Inhalt**,
+egal wie sie heißen oder wo sie liegen. **Es wird nichts gelöscht.**
+
+- Verglichen wird zuerst die Größe, dann die ersten 64 KB, erst dann die ganze Datei.
+  So müssen nur echte Kandidaten komplett gelesen werden.
+- Standardmäßig nur Dateien ab 1 MB (kleine Dateien erzeugen viel Rauschen).
+- Übersprungen werden Windows, Programme, ProgramData, AppData, Papierkorb,
+  Junctions (z. B. die Documents-Umleitung) und OneDrive-Dateien, die nur online liegen.
+- Ergebnis im Ordner `Protokolle`:
+  - `Duplikate_….txt` – gut lesbar, größte Platzverschwender zuerst, neueste Datei jeweils mit `*`.
+  - `Duplikate_….csv` – zum Sortieren und Filtern in Excel.
+
+Hinweis: Nach dem Umleiten tauchen `Documents_alt` und `Y:\Documents` natürlich als
+Duplikate auf – das ist die Sicherheitskopie und so gewollt.
+
+| Option | Wirkung |
+|---|---|
+| `--min 100KB` | Andere Mindestgröße (z. B. `0`, `500KB`, `10MB`) |
+| `--alles` | Auch Windows-, Programm- und AppData-Ordner durchsuchen |
+| `--netz` | Auch Netzlaufwerke durchsuchen |
+| `Y:\ E:\Fotos` | Nur diese Laufwerke/Ordner durchsuchen |
+
+Beispiel: `DuplikateFinden.exe --min 10MB Y:\ E:\`
+
 ## Selbst kompilieren
 
-Quellcode: `DokumenteSync.cpp` (C++17, keine Abhängigkeiten).
+Quellcode: `DokumenteSync.cpp` und `DuplikateFinden.cpp` (C++17, keine Abhängigkeiten).
+DuplikateFinden wird genauso gebaut (bei MinGW ohne die `-l…`-Bibliotheken).
 
 ```
 # Visual Studio (Developer Command Prompt)
